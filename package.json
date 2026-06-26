@@ -1,0 +1,16 @@
+{
+"name": "trade-tech-course",
+"version": "1.0.0",
+"description": "Trade Tech Course Registration & Payment",
+"main": "server.js",
+"scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+},
+"dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "nodemailer": "^6.9.16",
+    "puppeteer": "^24.4.0"
+}
+}

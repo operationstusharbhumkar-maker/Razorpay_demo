@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Tech Course - Registration</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f4f5f7;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            max-width: 440px;
+            width: 100%;
+            padding: 40px 32px;
+        }
+        .header { text-align: center; margin-bottom: 32px; }
+        .logo { font-size: 28px; margin-bottom: 12px; }
+        .header h1 { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-bottom: 6px; }
+        .header p { font-size: 14px; color: #888; }
+        .form-group { margin-bottom: 20px; }
+        .form-group label { display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 6px; }
+        .form-group input, .form-group select {
+            width: 100%; padding: 12px 14px; border: 1px solid #e0e0e0; border-radius: 10px;
+            font-size: 15px; font-family: 'Inter', sans-serif; color: #333; outline: none;
+            transition: border-color 0.2s; background: white; appearance: none; -webkit-appearance: none;
+        }
+        .form-group input:focus, .form-group select:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); }
+        .form-group input::placeholder { color: #bbb; }
+        .form-group select {
+            cursor: pointer;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 14px center; padding-right: 40px;
+        }
+        .price-summary { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: #f9fafb; border-radius: 10px; margin-bottom: 24px; border: 1px solid #eee; }
+        .price-summary span:first-child { font-size: 14px; color: #888; }
+        .price-summary span:last-child { font-size: 22px; font-weight: 700; color: #1a1a1a; }
+        .pay-btn {
+            width: 100%; padding: 14px; background: #4f46e5; color: white; border: none; border-radius: 10px;
+            font-size: 16px; font-weight: 600; font-family: 'Inter', sans-serif; cursor: pointer;
+            transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .pay-btn:hover { background: #4338ca; }
+        .footer-note { text-align: center; margin-top: 16px; font-size: 12px; color: #aaa; }
+        @media (max-width: 480px) { .card { padding: 30px 20px; } }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <div ><img src="images/tb.png" alt="" width="20%"></div>
+            <h1>Tushar Bhumkar Institute Pvt Ltd</h1>
+            <p>Fill your details below to get started</p>
+        </div>
+
+        <form action="/pay" method="POST">
+            <div class="form-group">
+                <label>Full Name</label>
+                <input type="text" name="name" placeholder="Enter your name" required>
+            </div>
+            <div class="form-group">
+                <label>Mobile Number</label>
+                <input type="tel" name="mobile" placeholder="10-digit number" pattern="[0-9]{10}" maxlength="10" required>
+            </div>
+            <div class="form-group">
+                <label>Email Address</label>
+                <input type="email" name="email" placeholder="Enter your email" required>
+            </div>
+            <div class="form-group">
+                <label>Course Name</label>
+                <input type="text" name="course_name" placeholder="Enter course name" required>
+            </div>
+            <div class="form-group">
+                <label>Batch</label>
+                <select name="batch_date" required>
+                    <option value="" disabled selected>Select a batch</option>
+                    <option value="2026-07-27">27 July 2026</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Amount (₹)</label>
+                <input type="number" name="amount" id="amountInput" placeholder="Enter amount" min="1" required oninput="updatePrice()">
+            </div>
+            <div class="price-summary">
+                <span>Total Amount</span>
+                <span id="priceDisplay">₹0</span>
+            </div>
+            <button type="submit" class="pay-btn">🔒 Pay Securely</button>
+            <div class="footer-note">Secured by Razorpay</div>
+        </form>
+    </div>
+
+    <script>
+        function updatePrice() {
+            const amount = document.getElementById('amountInput').value;
+            document.getElementById('priceDisplay').innerText = '₹' + Number(amount).toLocaleString('en-IN');
+        }
+        document.querySelector('input[name="mobile"]').addEventListener('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+    </script>
+</body>
+</html>
