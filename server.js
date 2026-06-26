@@ -1,8 +1,8 @@
-require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const puppeteer = require('puppeteer');
+const fs = require("fs");
+const puppeteer = require("puppeteer");
 const { supabaseInsert, supabaseUpdate } = require('./supabase');
 
 const app = express();
@@ -15,16 +15,30 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Puppeteer Singleton ────────────────────────────────────
 let browserInstance = null;
+
 async function getBrowser() {
-    if (!browserInstance) {
-        browserInstance = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-    }
+    if (browserInstance) return browserInstance;
+
+    const chromePath =
+        process.env.PUPPETEER_EXECUTABLE_PATH ||
+        "/opt/render/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome";
+
+    console.log("Chrome exists:", fs.existsSync(chromePath));
+    console.log("Chrome path:", chromePath);
+
+    browserInstance = await puppeteer.launch({
+        executablePath: chromePath,
+        headless: true,
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu"
+        ]
+    });
+
     return browserInstance;
 }
-
 // ── Nodemailer Transport ───────────────────────────────────
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
