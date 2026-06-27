@@ -15,12 +15,4 @@
 }
    
 }
-{
-       "puppeteer": {
-    "browsers": {
-      "chrome": {
-        "version": "130.0.6723.69"
-      }
-    }
-  }
-}
+
