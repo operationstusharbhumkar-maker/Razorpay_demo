@@ -2,9 +2,8 @@ const express = require('express');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
+const axios = require('axios');
 const { supabaseInsert, supabaseUpdate } = require('./supabase');
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,33 +18,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 
 // ══════════════════════════════════════════════════════════
-//  PDF GENERATION
+//  PDF GENERATION (PDFShift API - Works on Render)
 // ══════════════════════════════════════════════════════════
-async function generatePDF(html, options = {}) {
-  const browser = await puppeteer.launch({
-    executablePath: await chromium.executablePath(),
-    args: [
-      ...chromium.args,
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-    ],
-    headless: chromium.headless,
-  });
-
-  const page = await browser.newPage();
-  await page.setViewport({
-    width: options.width || 800,
-    height: options.height || 1200,
-    deviceScaleFactor: options.dpr || 2
-  });
-  await page.setContent(html, { waitUntil: 'networkidle0' });
-  const pdfBuffer = await page.pdf({
-    format: options.format || 'A4',
-    printBackground: true,
-    scale: options.scale || 1
-  });
-  await browser.close();
-  return pdfBuffer;
+async function generatePDF(html) {
+  const response = await axios.post(
+    'https://api.pdfshift.io/v3/convert/pdf',
+    html,
+    {
+      headers: {
+        'Content-Type': 'application/html',
+        'Authorization': 'Basic ' + Buffer.from('api:' + process.env.PDFSHIFT_API_KEY).toString('base64')
+      },
+      responseType: 'arraybuffer',
+      timeout: 30000
+    }
+  );
+  return Buffer.from(response.data);
 }
 
 
@@ -337,7 +325,7 @@ app.get('/failed', async (req, res) => {
 
 
 // ══════════════════════════════════════════════════════════
-//  ROUTE: Email Status Polling (For instant UI update)
+//  ROUTE: Email Status Polling
 // ══════════════════════════════════════════════════════════
 app.get('/email-status/:ref_id', (req, res) => {
   res.json({ status: emailStatusMap[req.params.ref_id] || '⏳ Sending...' });
@@ -394,7 +382,7 @@ app.get('/success', async (req, res) => {
     } catch (err) { console.error('Update error:', err.message); }
   }
 
-  // ✅ FIRE & FORGET — Page loads instantly, email sends in background
+  // FIRE & FORGET — Page loads instantly, email sends in background
   if (customer && isVerified) {
     emailStatusMap[ref_id] = "⏳ Sending...";
     
@@ -406,7 +394,6 @@ app.get('/success', async (req, res) => {
       .catch(err => console.error(`💬 ${ref_id} WhatsApp FAILED:`, err.message));
   }
 
-  // ✅ Send page IMMEDIATELY
   res.send(`
 <!DOCTYPE html>
 <html><head><title>Payment Successful</title>
@@ -449,12 +436,11 @@ app.get('/success', async (req, res) => {
   </div>
 
   <script>
-    // Real-time email status polling
     const refId = '${ref_id}';
     const statusEl = document.getElementById('email-status');
     let attempts = 0;
     const check = setInterval(() => {
-      if (++attempts > 20) return clearInterval(check); // Stop after 20s
+      if (++attempts > 20) return clearInterval(check);
       fetch('/email-status/' + refId)
         .then(r => r.json())
         .then(d => { 
@@ -530,9 +516,11 @@ td,th{border:1px solid #000;padding:4px;vertical-align:top;font-size:12px;}
 
 
 // ══════════════════════════════════════════════════════════
-//  FUNCTION: Send Invoice Email with HD PDF
+//  FUNCTION: Send Invoice Email with PDF (via PDFShift)
 // ══════════════════════════════════════════════════════════
 async function sendInvoiceEmail(customer, ref_id) {
+  console.log(`📧 Starting email for ${ref_id}...`);
+  
   const name = customer.full_name;
   const email = customer.email;
   const course = customer.course_name;
@@ -540,56 +528,62 @@ async function sendInvoiceEmail(customer, ref_id) {
   const batch = formatDatePHP(customer.batch_date, 'd M. Y');
   const invoiceNo = 'S - ' + String(ref_id).slice(-5).padStart(2, '0');
 
-  // 1. Build invoice HTML directly (no localhost fetch)
+  // 1. Build invoice HTML
   const invoiceBody = buildInvoiceHTML(customer);
   if (!invoiceBody) {
     emailStatusMap[ref_id] = "❌ Failed to build HTML";
     return "❌ Failed to build HTML";
   }
 
-  // 2. Convert logo to Base64 from filesystem
+  // 2. Convert logo to Base64
   let cleanHtml = invoiceBody;
+  const logoPath = path.join(__dirname, 'public', 'images', 'tb.png');
   try {
-    const logoPath = path.join(__dirname, 'public', 'images', 'tb.png');
     if (fs.existsSync(logoPath)) {
       const logoBuffer = fs.readFileSync(logoPath);
       const logoBase64 = `data:image/png;base64,${logoBuffer.toString('base64')}`;
       cleanHtml = cleanHtml.replace(/src=["']images\/tb\.png["']/g, `src="${logoBase64}"`);
+      console.log('🖼️ Logo converted to base64');
+    } else {
+      console.log('⚠️ Logo file not found:', logoPath);
     }
   } catch (err) {
-    console.error('Logo conversion failed:', err.message);
+    console.error('❌ Logo conversion failed:', err.message);
   }
 
   // 3. Wrap in PDF-optimized HTML
   const pdfHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: "Times New Roman", serif; background: #fff; padding: 0; margin: 0; }
-  .pdf-wrapper { padding: 100px 30px 0 30px; }
-  .invoice { width: 100%; margin: 0; background: #fff; border: 1px solid #000; }
-  .invoice .logo { width: 45px; }
-  table { width: 100%; border-collapse: collapse; }
-  td, th { border: 1px solid #000; padding: 4px; vertical-align: top; font-size: 12px; }
-  .right { text-align: right; }
-  .bold { font-weight: bold; }
-  .terms-block { padding: 10px; font-size: 12px; line-height: 1.5; }
-  .terms-block .section-title { font-weight: bold; font-size: 12px; text-transform: uppercase; }
-  .terms-block em { display: block; margin: 4px 0 8px 0; }
-  .terms-block ol { margin-left: 18px; padding-left: 0; }
-  .terms-block li { margin-bottom: 4px; text-align: justify; }
-  </style></head><body><div class="pdf-wrapper">${cleanHtml}</div></body></html>`;
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: "Times New Roman", serif; background: #fff; padding: 100px 30px 0; }
+    .invoice { width: 100%; background: #fff; border: 1px solid #000; }
+    .invoice .logo { width: 45px; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { border: 1px solid #000; padding: 4px; vertical-align: top; font-size: 12px; }
+    .right { text-align: right; }
+    .bold { font-weight: bold; }
+    .terms-block { padding: 10px; font-size: 12px; line-height: 1.5; }
+    .terms-block .section-title { font-weight: bold; text-transform: uppercase; }
+    .terms-block em { display: block; margin: 4px 0 8px; }
+    .terms-block ol { margin-left: 18px; }
+    .terms-block li { margin-bottom: 4px; text-align: justify; }
+  </style></head><body>${cleanHtml}</body></html>`;
 
-  // 4. Generate PDF
+  // 4. Generate PDF via PDFShift
   let pdfBuffer;
   try {
-    pdfBuffer = await generatePDF(pdfHtml, { format: 'A5', scale: 0.7 });
+    console.log('📄 Generating PDF via PDFShift...');
+    pdfBuffer = await generatePDF(pdfHtml);
+    console.log(`📄 PDF generated: ${pdfBuffer.length} bytes`);
   } catch (err) {
+    console.error('❌ PDF Generation Error:', err.message);
     emailStatusMap[ref_id] = "❌ PDF Error: " + err.message;
-    return "❌ PDF Error: " + err.message;
+    return "❌ PDF Error";
   }
 
   // 5. Send email
   try {
-    await transporter.sendMail({
+    console.log(`📬 Sending email to ${email}...`);
+    const info = await transporter.sendMail({
       from: `"${process.env.SMTP_FROM_NAME}" <${process.env.SMTP_FROM_EMAIL}>`,
       to: `${name} <${email}>`,
       subject: `Tax Invoice ${invoiceNo} | Technical Trade Consultancy`,
@@ -598,7 +592,7 @@ async function sendInvoiceEmail(customer, ref_id) {
   <p>Dear <strong>${name}</strong>,</p>
   <p>Thank you for enrolling in the <strong>${course}</strong> program with Technical Trade Consultancy.</p>
   <p>We are pleased to confirm receipt of your payment. Please find your tax invoice attached for your records.</p>
-  <table cellpadding="8" cellspacing="0" border="1" style="border-collapse: collapse;">
+  <table cellpadding="8" cellspacing="0" border="1" style="border-collapse: collapse; margin: 20px 0;">
     <tr><td><strong>Course</strong></td><td>${course}</td></tr>
     <tr><td><strong>Batch</strong></td><td>${batch}</td></tr>
     <tr><td><strong>Amount Paid</strong></td><td>₹${Number(amount).toLocaleString('en-IN')}</td></tr>
@@ -616,9 +610,11 @@ async function sendInvoiceEmail(customer, ref_id) {
       }]
     });
     
-    emailStatusMap[ref_id] = "✅ Sent with HD PDF!";
-    return "✅ Sent with HD PDF!";
+    console.log(`✅ Email sent: ${info.messageId}`);
+    emailStatusMap[ref_id] = "✅ Sent with PDF!";
+    return "✅ Sent with PDF!";
   } catch (err) {
+    console.error('❌ Email Send Error:', err.message);
     emailStatusMap[ref_id] = "❌ " + err.message;
     return "❌ " + err.message;
   }
@@ -649,7 +645,8 @@ async function sendWhatsAppInvoice(customer, payment_id) {
         ]
       })
     });
-  } catch (err) { console.error('WhatsApp error:', err); }
+    console.log(`💬 WhatsApp sent to ${mobile}`);
+  } catch (err) { console.error('💬 WhatsApp error:', err.message); }
 }
 
 
