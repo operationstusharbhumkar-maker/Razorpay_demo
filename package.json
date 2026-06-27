@@ -13,7 +13,10 @@
     "nodemailer": "^6.9.16",
    "puppeteer":"^24.43.1"
 }
-      "puppeteer": {
+   
+}
+{
+       "puppeteer": {
     "browsers": {
       "chrome": {
         "version": "130.0.6723.69"
