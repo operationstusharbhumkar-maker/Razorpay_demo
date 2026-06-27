@@ -1,37 +1,28 @@
 const express = require('express');
 const path = require('path');
-const nodemailer = require('nodemailer');
+const nodemailer = require('nodemailer'); // Kept as local fallback only
 const { supabaseInsert, supabaseUpdate } = require('./supabase');
-
-// ── Resend (if available) ───────────────────────────────
-let resend = null;
-try {
-  if (process.env.RESEND_API_KEY) {
-    resend = require('resend');
-    resend = new resend.Resend(process.env.RESEND_API_KEY);
-    console.log('✅ Resend loaded');
-  }
-} catch (e) {
-  console.log('⚠️ Resend not installed — using SMTP fallback');
-}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Store email status for real-time polling
 const emailStatusMap = {};
 
+// ── Middleware ──────────────────────────────────────────────
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 
-// ── Nodemailer Transport (Fallback) ─────────────────────
+// ── Nodemailer Transport (Local Fallback Only) ─────────────
 const smtpPort = Number(process.env.SMTP_PORT) || 465;
 const isSecurePort = smtpPort === 465;
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: smtpPort,
-  secure: isSecurePort, // true for 465, false for 587
+  secure: isSecurePort,
   auth: {
     user: process.env.SMTP_USERNAME,
     pass: process.env.SMTP_PASSWORD
@@ -39,31 +30,8 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 15000,
   greetingTimeout: 10000,
   socketTimeout: 15000,
-  tls: {
-    rejectUnauthorized: false // Helps with some SMTP providers
-  }
+  tls: { rejectUnauthorized: false }
 });
-
-
-// ── Test SMTP Connection on Startup ─────────────────────
-(async () => {
-  if (!process.env.SMTP_HOST) {
-    console.log('⚠️ No SMTP_HOST configured');
-    return;
-  }
-  console.log(`🔌 Testing SMTP: ${process.env.SMTP_HOST}:${smtpPort} (secure: ${isSecurePort})...`);
-  try {
-    await transporter.verify();
-    console.log('✅ SMTP connection OK');
-  } catch (err) {
-    console.error('❌ SMTP FAILED:', err.message);
-    if (resend) {
-      console.log('📧 Will use Resend as fallback');
-    } else {
-      console.log('⚠️ No email fallback available! Emails will fail.');
-    }
-  }
-})();
 
 
 // ── Helpers ────────────────────────────────────────────────
@@ -129,7 +97,7 @@ function convertToWords(num, ones, tens) {
 
 
 // ══════════════════════════════════════════════════════════
-//  Invoice HTML Builders
+//  HTML BUILDER: Browser Invoice View
 // ══════════════════════════════════════════════════════════
 function buildInvoiceHTML(c) {
   const invoiceNo = 'S-' + String(c.id || c.ref_id.slice(-4)).padStart(4, '0');
@@ -178,6 +146,10 @@ Batch Dt: ${batchDate}<br>GSTIN/UIN:<br>State Name: Maharashtra</td></tr>
 </ol></td></tr></table></div>`;
 }
 
+
+// ══════════════════════════════════════════════════════════
+//  HTML BUILDER: Email Invoice (Inline CSS for Gmail/Outlook)
+// ══════════════════════════════════════════════════════════
 function buildEmailInvoiceHTML(c) {
   const invoiceNo = 'S-' + String(c.id || c.ref_id.slice(-4)).padStart(4, '0');
   const totalAmount = parseFloat(c.amount);
@@ -237,10 +209,13 @@ Batch Dt: ${batchDate}<br>GSTIN/UIN:<br>State Name: Maharashtra</td></tr></table
 // ══════════════════════════════════════════════════════════
 //  ROUTES
 // ══════════════════════════════════════════════════════════
+
+// Registration Form
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
+// Pay
 app.post('/pay', async (req, res) => {
   const { name, mobile, email, course_name, batch_date, amount } = req.body;
   const refId = "TTC" + Math.floor(Date.now() / 1000);
@@ -259,6 +234,7 @@ app.post('/pay', async (req, res) => {
     rzp.open();</script>`);
 });
 
+// Failed
 app.get('/failed', async (req, res) => {
   const { ref_id, reason } = req.query;
   if (ref_id) { try { await supabaseUpdate('customers', { payment_status: reason || 'unknown' }, 'ref_id', ref_id); } catch (e) {} }
@@ -275,10 +251,12 @@ app.get('/failed', async (req, res) => {
     <a href="/" class="btn">← Try Again</a></div></body></html>`);
 });
 
+// Email Status Polling
 app.get('/email-status/:ref_id', (req, res) => {
   res.json({ status: emailStatusMap[req.params.ref_id] || '⏳ Sending...' });
 });
 
+// Success
 app.get('/success', async (req, res) => {
   const payment_id = req.query.payment_id || 'N/A';
   const ref_id = req.query.ref_id || 'N/A';
@@ -306,6 +284,7 @@ app.get('/success', async (req, res) => {
 
   if (ref_id !== 'N/A') { try { await supabaseUpdate('customers', { payment_id, payment_status: isVerified ? "paid" : "unverified", paid_at: now() }, 'ref_id', ref_id); } catch (e) {} }
 
+  // Fire & Forget Email and WhatsApp
   if (customer && isVerified) {
     emailStatusMap[ref_id] = "⏳ Sending...";
     sendInvoiceEmail(customer, ref_id).then(s => console.log(`📧 ${ref_id}: ${s}`)).catch(e => console.error(`📧 ${ref_id} FAILED:`, e.message));
@@ -341,6 +320,7 @@ app.get('/success', async (req, res) => {
     </body></html>`);
 });
 
+// Invoice (Browser View + Client-Side PDF)
 app.get('/invoice', async (req, res) => {
   const ref_id = req.query.ref_id;
   if (!ref_id) return res.status(400).send('No reference ID');
@@ -353,6 +333,7 @@ app.get('/invoice', async (req, res) => {
     c = result[0];
   } catch (e) { return res.status(500).send('Connection Error'); }
   const ino = 'S-' + String(c.id || c.ref_id.slice(-4)).padStart(4, '0');
+  
   res.send(`<!DOCTYPE html><html><head><title>Invoice ${ino}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -385,45 +366,60 @@ finally{b.disabled=false;b.textContent='📥 Download PDF';l.classList.remove('o
 
 
 // ══════════════════════════════════════════════════════════
-//  EMAIL SENDER: Resend (primary) → SMTP (fallback)
+//  FUNCTION: Send Invoice Email
+//  Primary: Resend (fetch API) | Fallback: Nodemailer SMTP
 // ══════════════════════════════════════════════════════════
 async function sendInvoiceEmail(customer, ref_id) {
   console.log(`📧 Starting email for ${ref_id}...`);
+  
   const name = customer.full_name;
   const email = customer.email;
-  const fromEmail = process.env.SMTP_FROM_EMAIL || 'info@tusharbhumkar.com';
   const fromName = process.env.SMTP_FROM_NAME || 'Technical Trade Consultancy';
   const invoiceNo = 'S - ' + String(ref_id).slice(-5).padStart(2, '0');
   const subject = `Tax Invoice ${invoiceNo} | Technical Trade Consultancy`;
   const html = buildEmailInvoiceHTML(customer);
-  const text = `Dear ${name},\n\nThank you for your payment.\nInvoice No: ${invoiceNo}\nAmount: ₹${customer.amount}\n\nView invoice: ${process.env.BASE_URL || 'http://localhost:' + PORT}/invoice?ref_id=${ref_id}\n\nRegards,\nTechnical Trade Consultancy`;
+  const text = `Dear ${name},\n\nThank you for your payment.\nInvoice: ${invoiceNo}\nAmount: ₹${customer.amount}\n\nView: ${process.env.BASE_URL || 'http://localhost:' + PORT}/invoice?ref_id=${ref_id}\n\nRegards,\nTechnical Trade Consultancy`;
 
-  // ── Method 1: Resend (HTTP API — no port issues) ──────
-  if (resend) {
+  // ── Method 1: Resend (Pure fetch - fixes Render timeout) ──
+  if (process.env.RESEND_API_KEY) {
     try {
-      console.log('📧 Trying Resend...');
-      const { data, error } = await resend.emails.send({
-        from: `${fromName} <${fromEmail}>`,
-        to: [email],
-        subject: subject,
-        html: html,
-        text: text
+      console.log('📧 Using Resend API...');
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: `${fromName} <onboarding@resend.dev>`,
+          to: [email],
+          subject: subject,
+          html: html,
+          text: text
+        })
       });
-      if (error) throw new Error(error.message);
-      console.log(`✅ Resend sent: ${data?.id}`);
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || `HTTP ${response.status}`);
+      }
+      
+      console.log(`✅ Resend sent: ${data.id}`);
       emailStatusMap[ref_id] = "✅ Sent!";
-      return "✅ Sent via Resend";
+      return "✅ Sent!";
     } catch (err) {
-      console.error('⚠️ Resend failed:', err.message);
-      // Fall through to SMTP
+      console.error('❌ Resend failed:', err.message);
+      emailStatusMap[ref_id] = "❌ " + err.message;
+      return "❌ " + err.message;
     }
   }
 
-  // ── Method 2: Nodemailer SMTP ─────────────────────────
+  // ── Method 2: Nodemailer SMTP (Local fallback) ──────────
   try {
-    console.log('📧 Trying SMTP...');
+    console.log('📧 Using SMTP fallback...');
     const info = await transporter.sendMail({
-      from: `"${fromName}" <${fromEmail}>`,
+      from: `"${fromName}" <${process.env.SMTP_FROM_EMAIL}>`,
       to: `${name} <${email}>`,
       subject: subject,
       html: html,
@@ -431,7 +427,7 @@ async function sendInvoiceEmail(customer, ref_id) {
     });
     console.log(`✅ SMTP sent: ${info.messageId}`);
     emailStatusMap[ref_id] = "✅ Sent!";
-    return "✅ Sent via SMTP";
+    return "✅ Sent!";
   } catch (err) {
     console.error('❌ SMTP failed:', err.message);
     emailStatusMap[ref_id] = "❌ " + err.message;
@@ -441,7 +437,7 @@ async function sendInvoiceEmail(customer, ref_id) {
 
 
 // ══════════════════════════════════════════════════════════
-//  WHATSAPP
+//  FUNCTION: Send WhatsApp Invoice
 // ══════════════════════════════════════════════════════════
 async function sendWhatsAppInvoice(customer, payment_id) {
   let mobile = String(customer.mobile).replace(/[^0-9]/g, '');
@@ -470,9 +466,14 @@ async function sendWhatsAppInvoice(customer, payment_id) {
 }
 
 
-// ── Start ─────────────────────────────────────────────────
+// ── Start Server ───────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
-  console.log(`📧 Email: ${resend ? 'Resend + SMTP fallback' : 'SMTP only'}`);
-  console.log(`   SMTP: ${process.env.SMTP_HOST || 'NOT CONFIGURED'}:${smtpPort}`);
+  if (process.env.RESEND_API_KEY) {
+    console.log('📧 Email: Resend API ✅');
+  } else if (process.env.SMTP_HOST) {
+    console.log(`📧 Email: SMTP (${process.env.SMTP_HOST})`);
+  } else {
+    console.log('⚠️  No email configured! Add RESEND_API_KEY to .env');
+  }
 });
