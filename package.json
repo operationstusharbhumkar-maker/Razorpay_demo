@@ -1,18 +1,18 @@
 {
-"name": "trade-tech-course",
-"version": "1.0.0",
-"description": "Trade Tech Course Registration & Payment",
-"main": "server.js",
-"scripts": {
+  "name": "trade-tech-course",
+  "version": "1.0.0",
+  "description": "Trade Tech Course Registration & Payment",
+  "main": "server.js",
+  "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
-},
-"dependencies": {
+    "dev": "node --watch server.js",
+    "build": "npm install"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^133.0.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "nodemailer": "^6.9.16",
-   "puppeteer":"^24.43.1"
+    "puppeteer-core": "^24.43.1"
+  }
 }
-   
-}
-
