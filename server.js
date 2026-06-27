@@ -2,8 +2,9 @@ const express = require('express');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const fs = require("fs");
-const puppeteer = require("puppeteer");
 const { supabaseInsert, supabaseUpdate } = require('./supabase');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,31 +14,26 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Puppeteer Singleton ────────────────────────────────────
-let browserInstance = null;
 
-async function getBrowser() {
-    if (browserInstance) return browserInstance;
+async function generatePDF(html) {
+  const browser = await puppeteer.launch({
+    executablePath: await chromium.executablePath(),
+    args: [
+      ...chromium.args,
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+    ],
+    headless: chromium.headless,
+  });
 
-    const chromePath =
-        process.env.PUPPETEER_EXECUTABLE_PATH ||
-        "/opt/render/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome";
-
-    console.log("Chrome exists:", fs.existsSync(chromePath));
-    console.log("Chrome path:", chromePath);
-
-    browserInstance = await puppeteer.launch({
-        executablePath: chromePath,
-        headless: true,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu"
-        ]
-    });
-
-    return browserInstance;
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: 'networkidle0' });
+  const pdfBuffer = await page.pdf({
+    format: 'A4',
+    printBackground: true,
+  });
+  await browser.close();
+  return pdfBuffer;
 }
 // ── Nodemailer Transport ───────────────────────────────────
 const transporter = nodemailer.createTransport({
