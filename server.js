@@ -18,25 +18,37 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 
 // ══════════════════════════════════════════════════════════
-//  PDF GENERATION (PDFShift API - Works on Render)
+//  PDF GENERATION (PDFShift API)
 // ══════════════════════════════════════════════════════════
 async function generatePDF(html) {
-  const response = await axios.post(
-    'https://api.pdfshift.io/v3/convert/pdf',
-    html,
-    {
-      headers: {
-        'Content-Type': 'application/html',
-        'Authorization': 'Basic ' + Buffer.from('api:' + process.env.PDFSHIFT_API_KEY).toString('base64')
+  try {
+    const response = await axios.post(
+      'https://api.pdfshift.io/v3/convert/pdf',
+      { 
+        source: html,
+        format: 'A5'
       },
-      responseType: 'arraybuffer',
-      timeout: 30000
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic ' + Buffer.from('api:' + process.env.PDFSHIFT_API_KEY).toString('base64')
+        },
+        responseType: 'arraybuffer',
+        timeout: 30000
+      }
+    );
+    return Buffer.from(response.data);
+  } catch (err) {
+    // Log the EXACT error message from PDFShift
+    let errorMsg = err.message;
+    if (err.response) {
+      // PDFShift returns error details in the response body
+      const errorBody = err.response.data ? Buffer.from(err.response.data).toString('utf-8') : 'No body';
+      errorMsg = `PDFShift ${err.response.status}: ${errorBody}`;
     }
-  );
-  return Buffer.from(response.data);
+    throw new Error(errorMsg);
+  }
 }
-
-
 // ── Nodemailer Transport ───────────────────────────────────
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
