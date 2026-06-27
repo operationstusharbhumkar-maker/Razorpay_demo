@@ -52,12 +52,16 @@ async function generatePDF(html) {
 // ── Nodemailer Transport ───────────────────────────────────
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: process.env.SMTP_SECURE === 'ssl',
+  port: Number(process.env.SMTP_PORT) || 587, // Fallback to 587
+  secure: false, // MUST be false for port 587 (Nodemailer will auto-upgrade to TLS)
   auth: {
     user: process.env.SMTP_USERNAME,
     pass: process.env.SMTP_PASSWORD
-  }
+  },
+  // Add timeouts to prevent infinite hanging on Render
+  connectionTimeout: 10000, // 10 seconds
+  greetingTimeout: 5000,   // 5 seconds
+  socketTimeout: 10000     // 10 seconds
 });
 
 
