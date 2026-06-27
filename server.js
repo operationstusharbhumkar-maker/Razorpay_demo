@@ -1,8 +1,6 @@
 const express = require('express');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const fs = require('fs');
-const axios = require('axios');
 const { supabaseInsert, supabaseUpdate } = require('./supabase');
 
 const app = express();
@@ -17,51 +15,18 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 
-// ══════════════════════════════════════════════════════════
-//  PDF GENERATION (PDFShift API)
-// ══════════════════════════════════════════════════════════
-async function generatePDF(html) {
-  try {
-    const response = await axios.post(
-      'https://api.pdfshift.io/v3/convert/pdf',
-      { 
-        source: html,
-        format: 'A5'
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + Buffer.from('api:' + process.env.PDFSHIFT_API_KEY).toString('base64')
-        },
-        responseType: 'arraybuffer',
-        timeout: 30000
-      }
-    );
-    return Buffer.from(response.data);
-  } catch (err) {
-    // Log the EXACT error message from PDFShift
-    let errorMsg = err.message;
-    if (err.response) {
-      // PDFShift returns error details in the response body
-      const errorBody = err.response.data ? Buffer.from(err.response.data).toString('utf-8') : 'No body';
-      errorMsg = `PDFShift ${err.response.status}: ${errorBody}`;
-    }
-    throw new Error(errorMsg);
-  }
-}
 // ── Nodemailer Transport ───────────────────────────────────
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT) || 587, // Fallback to 587
-  secure: false, // MUST be false for port 587 (Nodemailer will auto-upgrade to TLS)
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: false,
   auth: {
     user: process.env.SMTP_USERNAME,
     pass: process.env.SMTP_PASSWORD
   },
-  // Add timeouts to prevent infinite hanging on Render
-  connectionTimeout: 10000, // 10 seconds
-  greetingTimeout: 5000,   // 5 seconds
-  socketTimeout: 10000     // 10 seconds
+  connectionTimeout: 10000,
+  greetingTimeout: 5000,
+  socketTimeout: 10000
 });
 
 
@@ -147,7 +112,7 @@ function convertToWords(num, ones, tens) {
 
 
 // ══════════════════════════════════════════════════════════
-//  SHARED: Invoice HTML Builder
+//  SHARED: Invoice HTML Builder (Browser View)
 // ══════════════════════════════════════════════════════════
 function buildInvoiceHTML(c) {
   const invoiceNo = 'S-' + String(c.id || c.ref_id.slice(-4)).padStart(4, '0');
@@ -166,7 +131,7 @@ function buildInvoiceHTML(c) {
     batchDate = formatDatePHP(futureDate.toISOString(), 'd M. Y');
   }
 
-  return `<div class="invoice">
+  return `<div class="invoice" id="invoice-content">
 <table>
 <tr>
 <td style="width: 50%;">
@@ -245,6 +210,139 @@ Batch Dt: ${batchDate}<br>GSTIN/UIN:<br>State Name: Maharashtra
     </tr>
 </table>
 </div>`;
+}
+
+
+// ══════════════════════════════════════════════════════════
+//  EMAIL: Build Inline-Style HTML Invoice (for email clients)
+// ══════════════════════════════════════════════════════════
+function buildEmailInvoiceHTML(c) {
+  const invoiceNo = 'S-' + String(c.id || c.ref_id.slice(-4)).padStart(4, '0');
+  const totalAmount = parseFloat(c.amount);
+  const taxableAmount = Math.round((totalAmount / 1.18) * 100) / 100;
+  const cgstAmount = Math.round((taxableAmount * 0.09) * 100) / 100;
+  const sgstAmount = Math.round((taxableAmount * 0.09) * 100) / 100;
+  const amountInWords = 'INR ' + numberToWords(totalAmount.toFixed(2)) + ' Only';
+  const invoiceDate = formatDatePHP(c.paid_at || new Date().toISOString(), 'd-M-Y');
+
+  let batchDate;
+  if (c.batch_date) {
+    batchDate = formatDatePHP(c.batch_date, 'd M. Y');
+  } else {
+    const futureDate = addDays(c.paid_at || new Date().toISOString(), 2);
+    batchDate = formatDatePHP(futureDate.toISOString(), 'd M. Y');
+  }
+
+  const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+  return `
+<div style="font-family: 'Times New Roman', Times, serif; max-width: 650px; margin: 0 auto; background: #fff; border: 1px solid #000;">
+  
+  <!-- Header Table -->
+  <table width="100%" cellpadding="4" cellspacing="0" border="1" style="border-collapse: collapse; font-size: 12px;">
+    <tr>
+      <td width="50%" valign="top" style="padding: 10px;">
+        <b style="font-size: 14px;">TECHNICAL TRADE<br>CONSULTANCY</b><br><br>
+        1372, Shukrawar Peth, Natubag,<br>
+        Near Kelkar Museum<br>
+        Pune 411002.<br>
+        Contact No.: 9272000111<br>
+        Email: info@tusharbhumkar.com<br>
+        Website: tusharbhumkar.com<br>
+        GSTIN/UIN: 27AIWPB6660M1ZK<br>
+        State Name: Maharashtra<br>
+        Code: 27
+      </td>
+      <td width="50%" valign="top" style="padding: 10px;">
+        <table width="100%" cellpadding="2" cellspacing="0" border="0">
+          <tr>
+            <td style="font-weight: bold;">Invoice No.</td>
+            <td style="font-weight: bold;">Dated</td>
+          </tr>
+          <tr>
+            <td>${invoiceNo}</td>
+            <td>${invoiceDate}</td>
+          </tr>
+        </table>
+        <br>
+        <b>Buyer:</b><br>
+        ${escapeHtml(c.full_name)}<br>
+        Pune<br>
+        Contact No.: ${escapeHtml(c.mobile)}<br>
+        Email ID: ${escapeHtml(c.email)}<br>
+        Batch Dt: ${batchDate}<br>
+        GSTIN/UIN: <br>
+        State Name: Maharashtra
+      </td>
+    </tr>
+  </table>
+
+  <!-- Items Table -->
+  <table width="100%" cellpadding="4" cellspacing="0" border="1" style="border-collapse: collapse; font-size: 12px;">
+    <tr style="background: #f0f0f0;">
+      <th width="5%" style="text-align: center;">Sr</th>
+      <th width="15%" style="text-align: center;">HSN/SAC</th>
+      <th style="text-align: center;">Particulars</th>
+      <th width="18%" style="text-align: center;">Amount</th>
+    </tr>
+    <tr>
+      <td style="text-align: center;">1<br><br><br>2<br>3</td>
+      <td style="text-align: center;">999293</td>
+      <td>
+        <b>Training Charges</b>
+        <br><br><br>
+        <b>OUTPUT CGST @ 9%</b><br>
+        <b>OUTPUT SGST @ 9%</b>
+      </td>
+      <td style="text-align: right;">
+        <b>${taxableAmount.toFixed(2)}</b>
+        <br><br><br>
+        <b>${cgstAmount.toFixed(2)}</b><br>
+        <b>${sgstAmount.toFixed(2)}</b>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="3" style="text-align: right; font-weight: bold;">Total</td>
+      <td style="text-align: right; font-weight: bold; font-size: 13px;">RS.${totalAmount.toFixed(2)}</td>
+    </tr>
+  </table>
+
+  <!-- Amount in Words -->
+  <table width="100%" cellpadding="8" cellspacing="0" border="1" style="border-collapse: collapse; font-size: 12px;">
+    <tr>
+      <td>Amount Chargeable (in words)<br><br><b>${amountInWords}</b></td>
+      <td style="text-align: right;">E. & O.E.</td>
+    </tr>
+  </table>
+
+  <!-- Terms -->
+  <table width="100%" cellpadding="4" cellspacing="0" border="1" style="border-collapse: collapse; font-size: 11px;">
+    <tr>
+      <td style="padding: 10px; line-height: 1.6;">
+        <b style="text-transform: uppercase;">Terms and Conditions</b><br>
+        <em>Please read the terms & conditions to avoid any conflict of interest.</em>
+        <ol style="margin: 8px 0 0 18px; padding: 0;">
+          <li style="margin-bottom: 4px; text-align: justify;">We are not SEBI-registered research analysts or investment advisors.</li>
+          <li style="margin-bottom: 4px; text-align: justify;">We are only providing education services for the stock & commodity market.</li>
+          <li style="margin-bottom: 4px; text-align: justify;">All discussion and analysis in online and offline classes is just for education. We do not provide any tips, calls, buy-sell recommendations, assurance of return, guarantees on my learning techniques, investment advice, portfolio management, or account handling services.</li>
+          <li style="margin-bottom: 4px; text-align: justify;">After course completion, always conduct your own research and practice to choose securities for investment & trading.</li>
+          <li style="margin-bottom: 4px; text-align: justify;">Investments in the securities market are subject to market risk.</li>
+          <li style="margin-bottom: 4px; text-align: justify;">Booking amount or fees paid are non-refundable under any conditions.</li>
+          <li style="margin-bottom: 4px; text-align: justify;">For any queries, please contact us directly.</li>
+        </ol>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<div style="text-align: center; font-size: 11px; padding: 15px 0; color: #666; font-family: Arial, sans-serif;">
+  *** This is a Computer Generated Tax Invoice and does not require a physical signature. ***
+  <br><br>
+  <a href="${baseUrl}/invoice?ref_id=${c.ref_id}" style="display: inline-block; padding: 10px 25px; background: #22c55e; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold;">
+    📄 Download PDF Invoice
+  </a>
+</div>
+  `;
 }
 
 
@@ -472,7 +570,7 @@ app.get('/success', async (req, res) => {
 
 
 // ══════════════════════════════════════════════════════════
-//  ROUTE: Invoice (Browser View)
+//  ROUTE: Invoice (Browser View + Client-Side PDF Download)
 // ══════════════════════════════════════════════════════════
 app.get('/invoice', async (req, res) => {
   const ref_id = req.query.ref_id;
@@ -492,143 +590,184 @@ app.get('/invoice', async (req, res) => {
     return res.status(500).send('Connection Error');
   }
 
+  const invoiceNo = 'S-' + String(c.id || c.ref_id.slice(-4)).padStart(4, '0');
+
   res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-<title>Tax Invoice</title>
+<title>Tax Invoice - ${invoiceNo}</title>
+<!-- html2canvas + jsPDF for client-side PDF generation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:"Times New Roman", serif;background:#eee;padding:20px;}
-.invoice{width:800px;margin: 80px auto 20px auto;background:#fff;border:1px solid #000;}
+.invoice{width:800px;margin: 40px auto 20px auto;background:#fff;border:1px solid #000;padding:0;}
 .invoice .logo{width:75px;}
 table{width:100%;border-collapse:collapse;}
 td,th{border:1px solid #000;padding:4px;vertical-align:top;font-size:12px;}
 .center{text-align:center;}
 .right{text-align:right;}
 .bold{font-weight:bold;}
-.print-btn{padding:10px 20px;background:#000;color:#fff;border:none;cursor:pointer;margin-bottom:15px;}
+.print-btn{padding:10px 20px;background:#000;color:#fff;border:none;cursor:pointer;margin-bottom:15px;font-size:14px;}
+.pdf-btn{padding:10px 20px;background:#22c55e;color:#fff;border:none;cursor:pointer;margin-bottom:15px;font-size:14px;margin-left:10px;}
+.btn-container{text-align:center;margin-bottom:10px;}
 .terms-block{padding:10px;font-size:12px;line-height:1.5;}
 .terms-block .section-title{font-weight:bold;font-size:12px;text-transform:uppercase;}
 .terms-block em{display:block;margin:4px 0 8px 0;}
 .terms-block ol{margin-left:18px;padding-left:0;}
 .terms-block li{margin-bottom:4px;text-align:justify;}
+.footer-note{text-align:center;font-size:11px;padding:10px;font-weight:bold;}
+.loading-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:9999;justify-content:center;align-items:center;}
+.loading-overlay.active{display:flex;}
+.loading-box{background:#fff;padding:30px 40px;border-radius:12px;text-align:center;}
+.spinner{width:40px;height:40px;border:4px solid #eee;border-top:4px solid #22c55e;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 15px;}
+@keyframes spin{to{transform:rotate(360deg);}}
 @media print{
-  .print-btn{display:none;}
+  .btn-container,.loading-overlay{display:none!important;}
   body{background:#fff;padding:0;}
-  .invoice{margin-top:80px;margin-bottom:0;}
+  .invoice{margin-top:40px;margin-bottom:0;}
 }
 </style>
 </head>
 <body>
-<button onclick="window.print()" class="print-btn">Print / Save PDF</button>
+
+<div class="loading-overlay" id="loading">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <p><strong>Generating PDF...</strong></p>
+    <p style="color:#888;font-size:13px;">Please wait</p>
+  </div>
+</div>
+
+<div class="btn-container">
+  <button onclick="window.print()" class="print-btn">🖨️ Print</button>
+  <button onclick="downloadPDF()" class="pdf-btn" id="pdfBtn">📥 Download PDF</button>
+</div>
+
+<div id="invoice-wrapper">
  ${buildInvoiceHTML(c)}
-<div style="text-align:center;font-size:11px;padding:10px;font-weight:bold;">
+</div>
+
+<div class="footer-note">
   *** This is a Computer Generated Tax Invoice and does not require a physical signature. ***
 </div>
+
+<script>
+async function downloadPDF() {
+  const btn = document.getElementById('pdfBtn');
+  const loading = document.getElementById('loading');
+  
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating...';
+  loading.classList.add('active');
+  
+  try {
+    const element = document.getElementById('invoice-wrapper');
+    
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false
+    });
+    
+    const { jsPDF } = window.jspdf;
+    const imgData = canvas.toDataURL('image/png');
+    
+    // A5 dimensions in mm
+    const pdfWidth = 148;
+    const pdfHeight = 210;
+    
+    const imgWidth = canvas.width;
+    const imgHeight = canvas.height;
+    
+    // Calculate scaling to fit A5 width
+    const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+    const imgX = (pdfWidth - (imgWidth * ratio)) / 2;
+    
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a5'
+    });
+    
+    // If content is taller than one page, add pages
+    const scaledHeight = imgHeight * ratio;
+    let position = 0;
+    let pageHeight = pdfHeight;
+    
+    if (scaledHeight <= pageHeight) {
+      // Single page
+      pdf.addImage(imgData, 'PNG', imgX, 5, imgWidth * ratio, scaledHeight);
+    } else {
+      // Multi-page
+      let remainingHeight = scaledHeight;
+      let sourceY = 0;
+      
+      while (remainingHeight > 0) {
+        if (position > 0) pdf.addPage();
+        
+        const drawHeight = Math.min(remainingHeight, pageHeight - 10);
+        const sourceHeight = drawHeight / ratio;
+        
+        // Create a temporary canvas for this page
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = sourceHeight;
+        const ctx = pageCanvas.getContext('2d');
+        ctx.drawImage(canvas, 0, sourceY, canvas.width, sourceHeight, 0, 0, canvas.width, sourceHeight);
+        
+        const pageImgData = pageCanvas.toDataURL('image/png');
+        pdf.addImage(pageImgData, 'PNG', imgX, 5, imgWidth * ratio, drawHeight);
+        
+        sourceY += sourceHeight;
+        remainingHeight -= drawHeight;
+        position += pageHeight;
+      }
+    }
+    
+    pdf.save('Invoice_${invoiceNo.replace(/\s/g, '')}.pdf');
+    
+  } catch (err) {
+    console.error('PDF generation failed:', err);
+    alert('PDF generation failed. Please use Print > Save as PDF instead.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📥 Download PDF';
+    loading.classList.remove('active');
+  }
+}
+</script>
 </body></html>
   `);
 });
 
 
 // ══════════════════════════════════════════════════════════
-//  FUNCTION: Send Invoice Email with PDF (via PDFShift)
+//  FUNCTION: Send Invoice Email (HTML-based, NO PDF API)
 // ══════════════════════════════════════════════════════════
 async function sendInvoiceEmail(customer, ref_id) {
   console.log(`📧 Starting email for ${ref_id}...`);
   
   const name = customer.full_name;
   const email = customer.email;
-  const course = customer.course_name;
-  const amount = customer.amount;
-  const batch = formatDatePHP(customer.batch_date, 'd M. Y');
   const invoiceNo = 'S - ' + String(ref_id).slice(-5).padStart(2, '0');
 
-  // 1. Build invoice HTML
-  const invoiceBody = buildInvoiceHTML(customer);
-  if (!invoiceBody) {
-    emailStatusMap[ref_id] = "❌ Failed to build HTML";
-    return "❌ Failed to build HTML";
-  }
-
-  // 2. Convert logo to Base64
-  let cleanHtml = invoiceBody;
-  const logoPath = path.join(__dirname, 'public', 'images', 'tb.png');
   try {
-    if (fs.existsSync(logoPath)) {
-      const logoBuffer = fs.readFileSync(logoPath);
-      const logoBase64 = `data:image/png;base64,${logoBuffer.toString('base64')}`;
-      cleanHtml = cleanHtml.replace(/src=["']images\/tb\.png["']/g, `src="${logoBase64}"`);
-      console.log('🖼️ Logo converted to base64');
-    } else {
-      console.log('⚠️ Logo file not found:', logoPath);
-    }
-  } catch (err) {
-    console.error('❌ Logo conversion failed:', err.message);
-  }
-
-  // 3. Wrap in PDF-optimized HTML
-  const pdfHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "Times New Roman", serif; background: #fff; padding: 100px 30px 0; }
-    .invoice { width: 100%; background: #fff; border: 1px solid #000; }
-    .invoice .logo { width: 45px; }
-    table { width: 100%; border-collapse: collapse; }
-    td, th { border: 1px solid #000; padding: 4px; vertical-align: top; font-size: 12px; }
-    .right { text-align: right; }
-    .bold { font-weight: bold; }
-    .terms-block { padding: 10px; font-size: 12px; line-height: 1.5; }
-    .terms-block .section-title { font-weight: bold; text-transform: uppercase; }
-    .terms-block em { display: block; margin: 4px 0 8px; }
-    .terms-block ol { margin-left: 18px; }
-    .terms-block li { margin-bottom: 4px; text-align: justify; }
-  </style></head><body>${cleanHtml}</body></html>`;
-
-  // 4. Generate PDF via PDFShift
-  let pdfBuffer;
-  try {
-    console.log('📄 Generating PDF via PDFShift...');
-    pdfBuffer = await generatePDF(pdfHtml);
-    console.log(`📄 PDF generated: ${pdfBuffer.length} bytes`);
-  } catch (err) {
-    console.error('❌ PDF Generation Error:', err.message);
-    emailStatusMap[ref_id] = "❌ PDF Error: " + err.message;
-    return "❌ PDF Error";
-  }
-
-  // 5. Send email
-  try {
-    console.log(`📬 Sending email to ${email}...`);
     const info = await transporter.sendMail({
       from: `"${process.env.SMTP_FROM_NAME}" <${process.env.SMTP_FROM_EMAIL}>`,
       to: `${name} <${email}>`,
       subject: `Tax Invoice ${invoiceNo} | Technical Trade Consultancy`,
-      html: `
-<html><body style="font-family: Arial, sans-serif; color: #333;">
-  <p>Dear <strong>${name}</strong>,</p>
-  <p>Thank you for enrolling in the <strong>${course}</strong> program with Technical Trade Consultancy.</p>
-  <p>We are pleased to confirm receipt of your payment. Please find your tax invoice attached for your records.</p>
-  <table cellpadding="8" cellspacing="0" border="1" style="border-collapse: collapse; margin: 20px 0;">
-    <tr><td><strong>Course</strong></td><td>${course}</td></tr>
-    <tr><td><strong>Batch</strong></td><td>${batch}</td></tr>
-    <tr><td><strong>Amount Paid</strong></td><td>₹${Number(amount).toLocaleString('en-IN')}</td></tr>
-    <tr><td><strong>Invoice No.</strong></td><td>${invoiceNo}</td></tr>
-  </table>
-  <p>Please keep this invoice for your records.</p>
-  <p>If you have any questions or require assistance, please contact us.</p>
-  <p>Regards,<br><strong>Technical Trade Consultancy</strong><br>Phone: +91 9272000111</p>
-</body></html>`,
-      text: `Dear ${name},\n\nThank you for enrolling in ${course}.\n\nBatch: ${batch}\nAmount Paid: ₹${Number(amount).toLocaleString('en-IN')}\nInvoice No.: ${invoiceNo}\n\nPlease find your tax invoice attached.\n\nRegards,\nTechnical Trade Consultancy`,
-      attachments: [{
-        filename: `Invoice_${invoiceNo.replace(/\s/g, '')}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
-      }]
+      html: buildEmailInvoiceHTML(customer),
+      text: `Dear ${name},\n\nThank you for your payment.\n\nInvoice No: ${invoiceNo}\nAmount: ₹${customer.amount}\n\nPlease view your detailed invoice at:\n${process.env.BASE_URL || 'http://localhost:' + PORT}/invoice?ref_id=${ref_id}\n\nRegards,\nTechnical Trade Consultancy`
     });
     
     console.log(`✅ Email sent: ${info.messageId}`);
-    emailStatusMap[ref_id] = "✅ Sent with PDF!";
-    return "✅ Sent with PDF!";
+    emailStatusMap[ref_id] = "✅ Sent!";
+    return "✅ Sent!";
   } catch (err) {
     console.error('❌ Email Send Error:', err.message);
     emailStatusMap[ref_id] = "❌ " + err.message;
@@ -644,6 +783,7 @@ async function sendWhatsAppInvoice(customer, payment_id) {
   let mobile = String(customer.mobile).replace(/[^0-9]/g, '');
   if (mobile.length === 10) mobile = '91' + mobile;
   const batch = formatDatePHP(customer.batch_date, 'd M. Y');
+  const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
 
   try {
     await fetch('https://api.interakt.ai/v1/public/message/', {
@@ -657,7 +797,8 @@ async function sendWhatsAppInvoice(customer, payment_id) {
           { name: "amount", value: "₹" + customer.amount },
           { name: "payment_id", value: payment_id },
           { name: "ref_id", value: customer.ref_id },
-          { name: "batch", value: batch }
+          { name: "batch", value: batch },
+          { name: "invoice_link", value: `${baseUrl}/invoice?ref_id=${customer.ref_id}` }
         ]
       })
     });
